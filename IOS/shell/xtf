@@ -1,0 +1,229 @@
+#!/bin/sh
+
+# Autor: xivanu00 Dmitrii Ivanushkin
+
+#----------------------Initializing of variables------------------------#
+
+POSIXLY_CORRECT=yes
+
+FILE_CONTENT=""
+has_a=0
+has_b=0
+has_list=0
+has_list_currency=0
+has_status=0
+has_profit=0
+DATETIME_A=""
+DATETIME_B=""
+CURRENCY=""
+USER=""
+
+if [ -z "${XTF_PROFIT}" ]; then
+  export XTF_PROFIT=20
+fi
+
+#----------------------------HELP FUNCTION------------------------------#
+
+usage() {
+  printf "\n"
+  printf "\txtf [-h|--help] [FILTR] [PŘÍKAZ] UŽIVATEL LOG [LOG2 [...]\n"
+  printf "\n"
+  printf "\tPŘÍKAZ může být jeden z:\n"
+  printf "\t\tlist - výpis záznamů pro daného uživatele.\n"
+  printf "\t\tlist-currency - výpis seřazeného seznamu vyskytujících se měn.\n"
+  printf "\t\tstatus - výpis skutečného stavu účtu seskupeného a seřazeného dle jednotlivých měn.\n"
+  printf "\t\tprofit - výpis stavu účtu zákazníka se započítaným fiktivním výnosem.\n"
+  printf "\n"
+  printf "\tFILTR může být kombinace následujících:\n"
+  printf "\t\t-a DATETIME - after: jsou uvažovány pouze záznamy PO tomto datu a čase (bez něj). DATETIME je formátu YYYY-MM-DD HH:MM:SS.\n"
+  printf "\t\t-b DATETIME - before: jsou uvažovány pouze záznamy PŘED tímto datem a časem (bez něj).\n"
+  printf "\t\t-c CURRENCY - jsou uvažovány pouze záznamy odpovídající dané měně.\n"
+  printf "\n"
+  printf "\t-h a --help vypíšou nápovědu s krátkým popisem každého příkazu a přepínače.\n"
+  printf "\n"
+
+  exit 0
+}
+
+#--------------------------CHECKING ARGUMENTS---------------------------#
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -h | --help)
+    usage
+    ;;
+  -a)
+    if echo "$2" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
+      DATETIME_A="$2"
+      has_a=1
+      shift
+    else
+      printf "Chyba: -a potřebuje argument ve formátu YYYY-MM-DD HH:MM:SS\n" >&2
+      exit 1
+    fi
+    ;;
+  -b)
+    if echo "$2" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
+      DATETIME_B="$2"
+      has_b=1
+      shift
+    else
+      printf "Chyba: -b potřebuje argument ve formátu YYYY-MM-DD HH:MM:SS\n" >&2
+      exit 1
+    fi
+    ;;
+  -c)
+    if [ -z "$2" ]; then
+      printf "Chyba: -c potřebuje argument CURRENCY" >&2
+      exit 1
+    else
+      CURRENCY="$2"
+      shift
+    fi
+    ;;
+  list)
+    if [ -z "$2" ] && [ "$USER" = "" ]; then
+      printf "Chyba: list potřebuje argument USER" >&2
+      exit 1
+    elif [ "$USER" = "" ]; then
+      USER="$2"
+      shift
+    fi
+    has_list=1
+    ;;
+  list-currency)
+    if [ -z "$2" ] && [ "$USER" = "" ]; then
+      printf "Chyba: list-currency potřebuje argument USER" >&2
+      exit 1
+    elif [ "$USER" = "" ]; then
+      USER="$2"
+      shift
+    fi
+    has_list_currency=1
+    ;;
+  status)
+    if [ -z "$2" ] && [ "$USER" = "" ]; then
+      printf "Chyba: status potřebuje argument USER" >&2
+      exit 1
+    elif [ "$USER" = "" ]; then
+      USER="$2"
+      shift
+    fi
+    has_status=1
+    ;;
+  profit)
+    if [ -z "$2" ] && [ "$USER" = "" ]; then
+      printf "Chyba: profit potřebuje argument USER" >&2
+      exit 1
+    elif [ "$USER" = "" ]; then
+      USER="$2"
+      shift
+    fi
+    has_profit=1
+    ;;
+  *.gz)
+    FILE_CONTENT="$FILE_CONTENT\n$(zcat "$1")"
+    ;;
+  *)
+    if [ -f "$1" ]; then
+      FILE_CONTENT="$FILE_CONTENT\n$(cat "$1")"
+    elif [ "$USER" = "" ] && [ "$has_list" -eq 0 ]; then
+      has_list=1
+      USER="$1"
+    elif [ "$USER" != "" ]; then
+      printf "Chyba: Neznámý argument: %s" "$1" >&2
+      exit 1
+    fi
+    ;;
+  esac
+  shift
+done
+
+#--------------------------FILTER MERGED CONTENT---------------------------#
+
+filter_by_datetime() {
+  content="$1"
+  operator_a="none"
+  operator_b="none"
+
+  if [ "$has_a" -eq 1 ]; then
+    operator_a=">"
+  fi
+
+  if [ "$has_b" -eq 1 ]; then
+    operator_b="<"
+  fi
+
+  args_datetime_a=$(date +%s -d "$DATETIME_A")
+  args_datetime_b=$(date +%s -d "$DATETIME_B")
+
+  if [ "$operator_a" != "none" ] && [ "$operator_b" = "none" ]; then
+    printf "%b" "$content" | awk -F';' -v args_datetime="$args_datetime_a" -v operator="$operator_a" '
+            {
+                file_datetime = mktime(gensub(/[-:]/, " ", "g", $2))
+                if (operator == ">" && file_datetime > args_datetime) {
+                    print
+                }
+            }
+        '
+  elif [ "$operator_b" != "none" ] && [ "$operator_a" = "none" ]; then
+    printf "%b" "$content" | awk -F';' -v args_datetime="$args_datetime_b" -v operator="$operator_b" '
+            {
+                file_datetime = mktime(gensub(/[-:]/, " ", "g", $2))
+                if (operator == "<" && file_datetime < args_datetime) {
+                    print
+                }
+            }
+        '
+  elif [ "$operator_a" != "none" ] && [ "$operator_b" != "none" ]; then
+    printf "%b" "$content" | awk -F';' -v args_datetime_a="$args_datetime_a" -v args_datetime_b="$args_datetime_b" -v operator_a="$operator_a" -v operator_b="$operator_b" '
+            {
+                file_datetime = mktime(gensub(/[-:]/, " ", "g", $2))
+                if ((operator_a == ">" && file_datetime > args_datetime_a) && (operator_b == "<" && file_datetime < args_datetime_b)) {
+                    print
+                }
+            }
+        '
+  else
+    printf "%b" "$content"
+  fi
+}
+
+filter_by_currency() {
+  awk -F';' -v currency="$CURRENCY" '$3 == currency || currency == ""'
+}
+
+#--------------------------USE COMMANDS---------------------------#
+
+if [ "$has_list" -eq 1 ] && [ "$has_list_currency" != 1 ] && [ "$has_status" != 1 ] && [ "$has_profit" != 1 ]; then
+  filtered_content=$(filter_by_datetime "$FILE_CONTENT" | filter_by_currency)
+  printf "%b" "$filtered_content" | awk -F';' -v user="$USER" '$1 == user'
+fi
+
+if [ "$has_list_currency" -eq 1 ]; then
+  filtered_content=$(filter_by_datetime "$FILE_CONTENT" | filter_by_currency)
+  printf "%b" "$filtered_content" | awk -F';' -v user="$USER" '$1 == user' | awk -F';' '{print $3}' | sort | uniq
+fi
+
+if [ "$has_status" -eq 1 ]; then
+  filtered_content=$(filter_by_datetime "$FILE_CONTENT" | filter_by_currency)
+  printf "%b" "$filtered_content" | awk -F';' -v user="$USER" '$1 == user' | awk -F';' '{
+        CURR[$3]+=$4
+    } END {
+        for (C in CURR)
+            printf "%s : %.4f\n", C, CURR[C]
+    }' | sort | uniq
+fi
+
+if [ "$has_profit" -eq 1 ]; then
+  filtered_content=$(filter_by_datetime "$FILE_CONTENT" | filter_by_currency)
+  printf "%b" "$filtered_content" | awk -F';' -v user="$USER" '$1 == user' | awk -F';' -v profit="$XTF_PROFIT" '{
+        CURR[$3]+=$4
+    } END {
+        for (C in CURR)
+            if (CURR[C] > 0)
+                printf "%s : %.4f\n", C, CURR[C] * (1 + profit / 100)
+            else
+                printf "%s : %.4f\n", C, CURR[C]
+    }' | sort | uniq
+fi

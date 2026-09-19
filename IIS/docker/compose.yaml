@@ -1,0 +1,57 @@
+services:
+  # https://docs.docker.com/guides/pre-seeding/#pre-seed-the-database-by-bind-mounting-a-sql-script
+  db:
+    build:
+      context: ..
+      dockerfile: docker/Database.dockerfile
+    container_name: iis_project_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    volumes:
+      - data_sql:/var/lib/postgresql
+    healthcheck:
+      # Wait for PostgreSQL init process complete
+      # https://www.postgresql.org/docs/current/app-pg-isready.html
+      test:
+        ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Backend.dockerfile
+    container_name: iis_project_backend
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN in .env}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in .env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in .env}
+      AWS_REGION: ${AWS_REGION:?Set AWS_REGION in .env}
+      AWS_BUCKET_NAME: ${AWS_BUCKET_NAME:?Set AWS_BUCKET_NAME in .env}
+    depends_on:
+      # Wait for the moment, when database system is ready to accept connections
+      #https://github.com/compose-spec/compose-spec/blob/main/spec.md#long-syntax-1
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Frontend.dockerfile
+    container_name: iis_project_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:?Set VITE_API_URL in .env}
+      VITE_BASE_URL: ${VITE_BASE_URL:-/}
+
+volumes:
+  data_sql:
